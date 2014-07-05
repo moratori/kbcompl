@@ -4,10 +4,26 @@
   (:use :cl)
   (:export
     :prove-eqexpr
+    :prove-eqexpr%
+    :completion
+
+    :eqexpr
+
+    :endless-critical-pair-error
+    :endless-regularization-error
+    :same-complexity-error
     ))
 
 (in-package :kbcompl.system.main)
 
+
+
+(defvar +LIMIT+ 50)
+
+(define-condition endless-critical-pair-error () ())
+(define-condition endless-regularization-error () ())
+(define-condition same-complexity-error-error () ())
+ 
 
 (defstruct (vterm  (:constructor vterm (var const)))
   (var nil :type symbol)
@@ -293,13 +309,19 @@
 
 
 
+(defun get-regular% (term rules)
+  (get-regular term rules +LIMIT+)
+  )
 
 
 
 ;;; 正規形を求める
 ;;; つまりこれ以上簡約できない形まで変形する
-(defmethod get-regular ((term vterm) rules)
+(defmethod get-regular ((term vterm) rules cnt)
   (assert (and (listp rules) (every (lambda (x) (typep x 'rw-rule)) rules)))
+
+  (when (> 0 cnt)
+    (error (make-condition 'endless-regularization-error)))
   
   ;; どの規則のドメインにも合致しないなら
   ;; やってみて、変わってたらもっかいにした方がよくないか？
@@ -325,6 +347,7 @@
       :initial-value term)
       
       rules
+      (1- cnt)
       )
     )) 
  
@@ -343,7 +366,9 @@
   )
 
 
-(defmethod get-regular ((term fterm) rules)
+(defmethod get-regular ((term fterm) rules cnt)
+(when (> 0 cnt)
+    (error (make-condition 'endless-regularization-error)))
   (let ((result 
           (reduce 
     (lambda (res each)
@@ -360,7 +385,7 @@
     :initial-value term)
           ))
     (if (term= result term) result
-      (get-regular result rules)
+      (get-regular result rules (1- cnt))
       )
     
     )
@@ -390,11 +415,11 @@
         (loop for target in r
            if (and (not (rule= r1 r2)) (not (rule= r2 target))) do
            (let* ((left (rw-rule-left target))
-                  (reg-left1 (get-regular left (list r1)))
-                  (reg-left2 (get-regular left (list r2)))
+                  (reg-left1 (get-regular% left (list r1)))
+                  (reg-left2 (get-regular% left (list r2)))
                   (right (rw-rule-right target))
-                  (reg-right1 (get-regular right (list r1)))
-                  (reg-right2 (get-regular right (list r2))))
+                  (reg-right1 (get-regular% right (list r1)))
+                  (reg-right2 (get-regular% right (list r2))))
              
              (when (not (term= reg-left1 reg-left2))
                (push (eqexpr reg-left1 reg-left2) result))
@@ -424,23 +449,22 @@
   (dolist (each r)
     (format t "~A = ~A~%" (show (eqexpr-left each)) (show (eqexpr-right each)))
     )
+  (format t "~%")
   )
 
-(define-condition completion-error () ())
-
-(define-condition same-complexity () ())
 
 ;; 新しいRから生成された等式をEに戻す処理が抜けてる
 (defun completion (E &optional (R nil) (limit 150))
   
+
   (when (> 0 limit)
     (error 
-      (make-condition 'completion-error)))
+      (make-condition 'endless-critical-pair-error)))
 
   (if (null E) R
     (let* ((eqexpr (first E))
-           (left (get-regular (eqexpr-left eqexpr) r))
-           (right (get-regular (eqexpr-right eqexpr) r))
+           (left (get-regular% (eqexpr-left eqexpr) r))
+           (right (get-regular% (eqexpr-right eqexpr) r))
            (lo (get-order left))
            (ro (get-order right))) 
       (if (term= left right) 
@@ -460,7 +484,7 @@
                (1- limit))))
           (t 
            (error 
-             (make-condition 'same-complexity))))))))
+             (make-condition 'same-complexity-error))))))))
 
 
 (defun completion-toplevel (e)
@@ -473,25 +497,26 @@
 
 
 
-
-(defun prove-eqexpr (eqexpr axioms)
-  (let ((ruleset (completion axioms)))
-     (term= 
-       (get-regular 
+(defun prove-eqexpr% (eqexpr ruleset)
+  (term= 
+       (get-regular%
          (eqexpr-left eqexpr)
          ruleset)
-       (get-regular 
+       (get-regular% 
          (eqexpr-right eqexpr)
-         ruleset))))
+         ruleset)))
 
 
+(defun prove-eqexpr (eqexpr axioms)
+  (prove-eqexpr% eqexpr (completion axioms)))
+
+
+
+
+  
 
 
 #|
-  
-  sample 
-
-
 ;; { A = B , g(x,B) , g(A,B) = C} |- f(B) = C
 (print 
   (prove-eqexpr
@@ -523,4 +548,6 @@
       (eqexpr 
         (fterm 'add (vterm 'x nil) (fterm 's (vterm 'y nil)))
         (fterm 's (fterm 'add (vterm 'x nil) (vterm 'y nil)))))))
+
+
 |#
